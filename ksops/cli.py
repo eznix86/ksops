@@ -177,6 +177,30 @@ def decrypt(path: Path, in_place: bool, output: Path | None) -> None:
         sys.exit(1)
 
 
+@main.command("decrypt-all")
+@click.argument("path", type=click.Path(exists=True, path_type=Path), default=".")
+def decrypt_all(path: Path) -> None:
+    """Decrypt every SOPS YAML file under a path in-place."""
+    files = find_sops_files(path)
+    if not files:
+        click.echo("No SOPS-encrypted YAML files found.")
+        return
+
+    errors: list[str] = []
+    sops = Sops()
+    for file_path in files:
+        try:
+            sops.decrypt_in_place(file_path)
+        except KsopsError as e:
+            errors.append(f"{file_path}: {e}")
+
+    click.echo(f"Decrypted {len(files) - len(errors)} file(s)")
+    if errors:
+        for error in errors:
+            click.echo(f"Error: {error}", err=True)
+        sys.exit(1)
+
+
 @main.command()
 @click.argument("path", type=click.Path(exists=True, path_type=Path))
 def rekey(path: Path) -> None:

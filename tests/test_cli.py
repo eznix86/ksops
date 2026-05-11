@@ -24,6 +24,11 @@ def completed(stdout: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.CompletedProcess(["sops"], 0, stdout=stdout, stderr="")
 
 
+def unchanged() -> subprocess.CompletedProcess[str]:
+    """Return SOPS' unchanged edit result."""
+    return subprocess.CompletedProcess(["sops"], 200, stdout="", stderr="")
+
+
 def test_init_creates_sops_yaml() -> None:
     runner = CliRunner()
 
@@ -89,7 +94,7 @@ def test_edit_calls_native_sops(monkeypatch) -> None:
 
 def test_edit_reports_sops_error(monkeypatch) -> None:
     def run(command, **kwargs):
-        raise subprocess.CalledProcessError(1, command, stderr="edit failed")
+        return subprocess.CompletedProcess(command, 1, stdout="", stderr="")
 
     monkeypatch.setattr("ksops.sops.subprocess.run", run)
     runner = CliRunner()
@@ -99,7 +104,18 @@ def test_edit_reports_sops_error(monkeypatch) -> None:
         result = runner.invoke(main, ["edit", "secret.yaml"])
 
     assert result.exit_code == 1
-    assert "edit failed" in result.output
+    assert "exit status 1" in result.output
+
+
+def test_edit_treats_unchanged_sops_file_as_success(monkeypatch) -> None:
+    monkeypatch.setattr("ksops.sops.subprocess.run", lambda command, **kwargs: unchanged())
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("secret.yaml").write_text("sops: {}\n")
+        result = runner.invoke(main, ["edit", "secret.yaml"])
+
+    assert result.exit_code == 0
 
 
 def test_cat_decrypts_to_stdout(monkeypatch) -> None:
@@ -388,6 +404,106 @@ def test_decrypt_reports_sops_error(monkeypatch) -> None:
     assert "decrypt failed" in result.output
 
 
+def test_decrypt_all_decrypts_sops_files_only(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("encrypted.yaml").write_text("kind: Secret\nsops: {}\n")
+        Path("plain.yaml").write_text("kind: Secret\nstringData:\n  password: secret\n")
+        result = runner.invoke(main, ["decrypt-all"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-d", "-i", "encrypted.yaml"]]
+    assert "Decrypted 1 file" in result.output
+
+
+def test_decrypt_all_finds_nested_sops_files(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        nested = Path("clusters/prod/app")
+        nested.mkdir(parents=True)
+        (nested / "secret.yaml").write_text("kind: Secret\nsops: {}\n")
+        result = runner.invoke(main, ["decrypt-all", "clusters"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-d", "-i", "clusters/prod/app/secret.yaml"]]
+    assert "Decrypted 1 file" in result.output
+
+
+def test_decrypt_all_finds_sops_metadata_between_manifests(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("bundle.yaml").write_text(
+            """kind: Deployment
+metadata:
+  name: app
+---
+kind: Secret
+metadata:
+  name: app-secret
+sops: {}
+---
+kind: Ingress
+metadata:
+  name: app
+"""
+        )
+        result = runner.invoke(main, ["decrypt-all"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-d", "-i", "bundle.yaml"]]
+    assert "Decrypted 1 file" in result.output
+
+
+def test_decrypt_all_reports_no_sops_files() -> None:
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("plain.yaml").write_text("kind: ConfigMap\n")
+        result = runner.invoke(main, ["decrypt-all"])
+
+    assert result.exit_code == 0
+    assert "No SOPS-encrypted YAML files found" in result.output
+
+
+def test_decrypt_all_reports_errors(monkeypatch) -> None:
+    def run(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="cannot decrypt")
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("encrypted.yaml").write_text("sops: {}\n")
+        result = runner.invoke(main, ["decrypt-all"])
+
+    assert result.exit_code == 1
+    assert "cannot decrypt" in result.output
+
+
 def test_rekey_calls_updatekeys(monkeypatch) -> None:
     calls: list[list[str]] = []
 
@@ -650,7 +766,7 @@ def test_sops_reports_missing_binary(monkeypatch) -> None:
 
 def test_sops_reports_called_process_error_without_stderr(monkeypatch) -> None:
     def run(command, **kwargs):
-        raise subprocess.CalledProcessError(12, command, stderr="")
+        return subprocess.CompletedProcess(command, 12, stdout="", stderr="")
 
     monkeypatch.setattr("ksops.sops.subprocess.run", run)
 
@@ -658,6 +774,25 @@ def test_sops_reports_called_process_error_without_stderr(monkeypatch) -> None:
         Sops().decrypt(Path("secret.yaml"))
     except KsopsError as e:
         assert "exit status 12" in str(e)
+    else:
+        raise AssertionError("expected KsopsError")
+
+
+def test_sops_summarizes_missing_age_identity(monkeypatch) -> None:
+    def run(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            1,
+            command,
+            stderr="no identity matched any of the recipients",
+        )
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+
+    try:
+        Sops().decrypt(Path("secret.yaml"))
+    except KsopsError as e:
+        assert "no matching age identity found" in str(e)
+        assert "SOPS_AGE_KEY_FILE" in str(e)
     else:
         raise AssertionError("expected KsopsError")
 

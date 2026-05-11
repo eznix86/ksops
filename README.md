@@ -17,6 +17,7 @@ But Kubernetes secret repos often need repeatable project workflows around that 
 | Encrypt files for GitOps | ✅ | ✅ (via sops) |
 | Edit encrypted files | ✅ | ✅ `ksops edit` |
 | Decrypt to stdout | ✅ | ✅ `ksops cat` |
+| Decrypt all encrypted manifests | ❌ | ✅ `ksops decrypt-all` |
 | Initialize Kubernetes Secret defaults | ❌ | ✅ `ksops init` |
 | Encrypt all plaintext Secret manifests | ❌ | ✅ `ksops encrypt-all` |
 | Rekey one file from `.sops.yaml` | ✅ `sops updatekeys` | ✅ `ksops rekey` |
@@ -32,6 +33,7 @@ ksops cat secret.yaml
 ksops encrypt secret.yaml --in-place
 ksops encrypt-all ./manifests
 ksops decrypt secret.yaml
+ksops decrypt-all ./manifests
 ksops rekey secret.yaml
 ksops rekey-all ./manifests
 ksops validate-all ./manifests

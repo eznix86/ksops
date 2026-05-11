@@ -10,6 +10,11 @@ from .exceptions import KsopsError
 
 def _format_stderr(error: subprocess.CalledProcessError) -> str:
     stderr = error.stderr.strip() if isinstance(error.stderr, str) else ""
+    if "no identity matched any of the recipients" in stderr:
+        return (
+            "no matching age identity found; set SOPS_AGE_KEY_FILE or SOPS_AGE_KEY "
+            "for one of the file recipients"
+        )
     return stderr or f"exit status {error.returncode}"
 
 
@@ -19,15 +24,32 @@ class Sops:
     def __init__(self, binary: str = "sops") -> None:
         self.binary = binary
 
-    def run(self, args: list[str], operation: str, *, interactive: bool = False) -> str:
+    def run(
+        self,
+        args: list[str],
+        operation: str,
+        *,
+        interactive: bool = False,
+        success_codes: set[int] | None = None,
+    ) -> str:
         """Run sops and return stdout."""
         command = [self.binary, *args]
+        success_codes = success_codes or {0}
         try:
             if interactive:
-                subprocess.run(command, check=True)
+                result = subprocess.run(command)
+                if result.returncode not in success_codes:
+                    raise subprocess.CalledProcessError(result.returncode, command)
                 return ""
 
-            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode not in success_codes:
+                raise subprocess.CalledProcessError(
+                    result.returncode,
+                    command,
+                    output=result.stdout,
+                    stderr=result.stderr,
+                )
             return result.stdout
         except FileNotFoundError as e:
             raise KsopsError(f"sops binary not found: {self.binary}") from e
@@ -36,7 +58,7 @@ class Sops:
 
     def edit(self, path: Path) -> None:
         """Open native sops edit flow."""
-        self.run([str(path)], "edit", interactive=True)
+        self.run([str(path)], "edit", interactive=True, success_codes={0, 200})
 
     def decrypt(self, path: Path) -> str:
         """Decrypt a file to stdout."""
