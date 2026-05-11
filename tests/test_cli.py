@@ -325,6 +325,27 @@ def test_rekey_all_updates_sops_files_only(monkeypatch) -> None:
     assert "Rekeyed 1 file" in result.output
 
 
+def test_rekey_all_finds_nested_sops_files(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        nested = Path("clusters/prod/app")
+        nested.mkdir(parents=True)
+        (nested / "secret.yaml").write_text("kind: Secret\nsops: {}\n")
+        result = runner.invoke(main, ["rekey-all", "clusters"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "updatekeys", "-y", "clusters/prod/app/secret.yaml"]]
+    assert "Rekeyed 1 file" in result.output
+
+
 def test_rekey_all_reports_no_sops_files() -> None:
     runner = CliRunner()
 
@@ -361,6 +382,33 @@ def test_validate_all_fails_on_plaintext_secret(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "plaintext Kubernetes Secret" in result.output
+
+
+def test_validate_all_finds_plaintext_secret_between_manifests(monkeypatch) -> None:
+    monkeypatch.setattr("ksops.sops.subprocess.run", lambda command, **kwargs: completed())
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("bundle.yaml").write_text(
+            """kind: Deployment
+metadata:
+  name: app
+---
+kind: Secret
+metadata:
+  name: app-secret
+stringData:
+  password: secret
+---
+kind: Ingress
+metadata:
+  name: app
+"""
+        )
+        result = runner.invoke(main, ["validate-all"])
+
+    assert result.exit_code == 1
+    assert "bundle.yaml: plaintext Kubernetes Secret" in result.output
 
 
 def test_validate_all_decrypts_sops_files(monkeypatch) -> None:
