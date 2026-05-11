@@ -12,7 +12,7 @@ from click.shell_completion import shell_complete
 
 from . import __version__
 from .exceptions import KsopsError
-from .files import find_sops_files, validate_files
+from .files import find_plaintext_secret_files, find_sops_files, validate_files
 from .sops import Sops
 
 DEFAULT_CONFIG = Path(".sops.yaml")
@@ -118,6 +118,30 @@ def encrypt(path: Path, in_place: bool, output: Path | None) -> None:
                 click.echo(encrypted, nl=False)
     except KsopsError as e:
         click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@main.command("encrypt-all")
+@click.argument("path", type=click.Path(exists=True, path_type=Path), default=".")
+def encrypt_all(path: Path) -> None:
+    """Encrypt every plaintext Kubernetes Secret YAML file under a path."""
+    files = find_plaintext_secret_files(path)
+    if not files:
+        click.echo("No plaintext Kubernetes Secret YAML files found.")
+        return
+
+    errors: list[str] = []
+    sops = Sops()
+    for file_path in files:
+        try:
+            sops.encrypt_in_place(file_path)
+        except KsopsError as e:
+            errors.append(f"{file_path}: {e}")
+
+    click.echo(f"Encrypted {len(files) - len(errors)} file(s)")
+    if errors:
+        for error in errors:
+            click.echo(f"Error: {error}", err=True)
         sys.exit(1)
 
 

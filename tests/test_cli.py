@@ -10,6 +10,7 @@ from click.testing import CliRunner
 from ksops.cli import main
 from ksops.exceptions import KsopsError
 from ksops.files import (
+    find_plaintext_secret_files,
     find_sops_files,
     find_yaml_files,
     has_plaintext_kubernetes_secret,
@@ -195,6 +196,111 @@ def test_encrypt_in_place_calls_sops(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert calls == [["sops", "-e", "-i", "secret.yaml"]]
+
+
+def test_encrypt_all_encrypts_plaintext_secret_files_only(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("secret.yaml").write_text("kind: Secret\nstringData:\n  password: secret\n")
+        Path("encrypted.yaml").write_text(
+            "kind: Secret\nsops: {}\nstringData:\n  password: secret\n"
+        )
+        Path("config.yaml").write_text("kind: ConfigMap\ndata:\n  key: value\n")
+        result = runner.invoke(main, ["encrypt-all"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-e", "-i", "secret.yaml"]]
+    assert "Encrypted 1 file" in result.output
+
+
+def test_encrypt_all_finds_nested_plaintext_secret_files(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        nested = Path("clusters/prod/app")
+        nested.mkdir(parents=True)
+        (nested / "secret.yaml").write_text("kind: Secret\nstringData:\n  password: secret\n")
+        result = runner.invoke(main, ["encrypt-all", "clusters"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-e", "-i", "clusters/prod/app/secret.yaml"]]
+    assert "Encrypted 1 file" in result.output
+
+
+def test_encrypt_all_finds_plaintext_secret_between_manifests(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return completed()
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("bundle.yaml").write_text(
+            """kind: Deployment
+metadata:
+  name: app
+---
+kind: Secret
+metadata:
+  name: app-secret
+stringData:
+  password: secret
+---
+kind: Ingress
+metadata:
+  name: app
+"""
+        )
+        result = runner.invoke(main, ["encrypt-all"])
+
+    assert result.exit_code == 0
+    assert calls == [["sops", "-e", "-i", "bundle.yaml"]]
+    assert "Encrypted 1 file" in result.output
+
+
+def test_encrypt_all_reports_no_plaintext_secret_files() -> None:
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("config.yaml").write_text("kind: ConfigMap\ndata:\n  key: value\n")
+        result = runner.invoke(main, ["encrypt-all"])
+
+    assert result.exit_code == 0
+    assert "No plaintext Kubernetes Secret YAML files found" in result.output
+
+
+def test_encrypt_all_reports_errors(monkeypatch) -> None:
+    def run(command, **kwargs):
+        raise subprocess.CalledProcessError(1, command, stderr="cannot encrypt")
+
+    monkeypatch.setattr("ksops.sops.subprocess.run", run)
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("secret.yaml").write_text("kind: Secret\nstringData:\n  password: secret\n")
+        result = runner.invoke(main, ["encrypt-all"])
+
+    assert result.exit_code == 1
+    assert "cannot encrypt" in result.output
+
 
 
 def test_decrypt_in_place_calls_sops(monkeypatch) -> None:
@@ -469,6 +575,16 @@ def test_find_sops_files_skips_invalid_yaml() -> None:
         Path("encrypted.yaml").write_text("sops: {}\n")
 
         assert find_sops_files(Path(".")) == [Path("encrypted.yaml")]
+
+
+def test_find_plaintext_secret_files_skips_invalid_yaml() -> None:
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        Path("broken.yaml").write_text("key: [\n")
+        Path("secret.yaml").write_text("kind: Secret\nstringData:\n  password: secret\n")
+
+        assert find_plaintext_secret_files(Path(".")) == [Path("secret.yaml")]
 
 
 def test_plaintext_secret_detection_ignores_safe_documents() -> None:

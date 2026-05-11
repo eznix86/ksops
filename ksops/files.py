@@ -67,6 +67,18 @@ def find_sops_files(root: Path) -> list[Path]:
     return result
 
 
+def find_plaintext_secret_files(root: Path) -> list[Path]:
+    """Find YAML files that contain plaintext Kubernetes Secrets."""
+    result: list[Path] = []
+    for path in find_yaml_files(root):
+        try:
+            if not has_sops_metadata(path) and has_plaintext_kubernetes_secret(path):
+                result.append(path)
+        except KsopsError:
+            continue
+    return result
+
+
 def validate_files(root: Path, sops: Sops) -> tuple[int, list[str]]:
     """Validate YAML files for SOPS metadata, decryptability, and plaintext Secret leaks."""
     encrypted_count = 0
