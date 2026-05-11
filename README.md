@@ -26,7 +26,7 @@ But Kubernetes secret repos often need repeatable project workflows around that 
 ## Commands
 
 ```bash
-ksops init
+ksops init --age age1...
 ksops edit secret.yaml
 ksops cat secret.yaml
 ksops encrypt secret.yaml --in-place
@@ -49,8 +49,8 @@ creation_rules:
     age: age1...
 ```
 
-`ksops init` can create a starter `.sops.yaml`, but all encryption behavior is still
-handled by SOPS itself.
+`ksops init --age age1...` creates a starter `.sops.yaml`, but all encryption
+behavior is still handled by SOPS itself.
 
 ## Shell Completion
 

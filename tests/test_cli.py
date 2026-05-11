@@ -53,10 +53,20 @@ def test_init_force_overwrites_existing_config() -> None:
 
     with runner.isolated_filesystem():
         Path(".sops.yaml").write_text("old\n")
-        result = runner.invoke(main, ["init", "--force"])
+        result = runner.invoke(main, ["init", "--force", "--age", "age1example"])
 
         assert result.exit_code == 0
         assert "creation_rules:" in Path(".sops.yaml").read_text()
+
+
+def test_init_requires_age_recipient() -> None:
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        result = runner.invoke(main, ["init"])
+
+    assert result.exit_code == 1
+    assert "provide --age" in result.output
 
 
 def test_edit_calls_native_sops(monkeypatch) -> None:

@@ -29,14 +29,15 @@ def write_default_config(
     """Write a starter .sops.yaml config."""
     if path.exists() and not force:
         raise FileExistsError(path)
+    if not age:
+        raise KsopsError("provide --age to create an encryptable .sops.yaml")
 
     lines = [
         "creation_rules:",
         f"  - path_regex: {path_regex}",
         f"    encrypted_regex: {encrypted_regex}",
+        f"    age: {age}",
     ]
-    if age:
-        lines.append(f"    age: {age}")
 
     path.write_text("\n".join(lines) + "\n")
     return path
@@ -68,6 +69,9 @@ def init(age: str | None, force: bool) -> None:
         click.echo(f"Created {config_path}")
     except FileExistsError:
         click.echo(".sops.yaml already exists. Use --force to overwrite.", err=True)
+        sys.exit(1)
+    except KsopsError as e:
+        click.echo(f"Error: {e}", err=True)
         sys.exit(1)
 
 
